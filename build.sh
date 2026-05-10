@@ -2,24 +2,23 @@
 
 export KERNEL_VERSION=5.4
 export BUSYBOX_VERSION=1.32.0
+export ARCH=x86_64
+export CROSS_COMPILE=x86_64-linux-gnu-
 
-#
-# dependencies
-#
+GCC_VER=14
+TARGET_CC=x86_64-linux-gnu-gcc-$GCC_VER
+HOST_CC=gcc-$GCC_VER
+
 echo "[+] Checking / installing dependencies..."
 sudo apt-get -q update
-sudo apt-get -q install -y bc bison flex libelf-dev cpio build-essential libssl-dev qemu-system-x86
-
-#
-# linux kernel
-#
+sudo apt-get -q install -y bc bison flex libelf-dev cpio build-essential libssl-dev qemu-system-x86 gcc-$GCC_VER gcc-$GCC_VER-x86-64-linux-gnu
 
 echo "[+] Downloading kernel..."
 wget -q -c https://mirrors.edge.kernel.org/pub/linux/kernel/v5.x/linux-$KERNEL_VERSION.tar.gz
 [ -e linux-$KERNEL_VERSION ] || tar xzf linux-$KERNEL_VERSION.tar.gz
 
 echo "[+] Building kernel..."
-make -C linux-$KERNEL_VERSION defconfig
+make -C linux-$KERNEL_VERSION CC=$TARGET_CC HOSTCC=$HOST_CC defconfig
 echo "CONFIG_NET_9P=y" >> linux-$KERNEL_VERSION/.config
 echo "CONFIG_NET_9P_DEBUG=n" >> linux-$KERNEL_VERSION/.config
 echo "CONFIG_9P_FS=y" >> linux-$KERNEL_VERSION/.config
@@ -53,25 +52,24 @@ sed -i 'N;s/WARN("missing symbol table");\n\t\treturn -1;/\n\t\treturn 0;\n\t\t\
 
 sed -i 's/unsigned long __force_order/\/\/ unsigned long __force_order/g' linux-$KERNEL_VERSION/arch/x86/boot/compressed/pgtable_64.c
 
-make -C linux-$KERNEL_VERSION -j16 bzImage
+sed -i '/^extern size_t strlcpy(char \*dest, const char \*src, size_t size);$/d' linux-$KERNEL_VERSION/tools/include/linux/string.h
 
-#
-# Busybox
-#
+sed -i 's/-Werror//g' linux-$KERNEL_VERSION/tools/lib/subcmd/Makefile
+sed -i 's/-Werror//g' linux-$KERNEL_VERSION/tools/objtool/Makefile
+
+make -C linux-$KERNEL_VERSION CC=$TARGET_CC HOSTCC=$HOST_CC olddefconfig
+make -C linux-$KERNEL_VERSION CC=$TARGET_CC HOSTCC=$HOST_CC -j$(nproc) bzImage
 
 echo "[+] Downloading busybox..."
 wget -q -c https://busybox.net/downloads/busybox-$BUSYBOX_VERSION.tar.bz2
 [ -e busybox-$BUSYBOX_VERSION ] || tar xjf busybox-$BUSYBOX_VERSION.tar.bz2
 
 echo "[+] Building busybox..."
-make -C busybox-$BUSYBOX_VERSION defconfig
+make -C busybox-$BUSYBOX_VERSION CC=$TARGET_CC HOSTCC=$HOST_CC defconfig
 sed -i 's/# CONFIG_STATIC is not set/CONFIG_STATIC=y/g' busybox-$BUSYBOX_VERSION/.config
-make -C busybox-$BUSYBOX_VERSION -j16
-make -C busybox-$BUSYBOX_VERSION install
-
-#
-# filesystem
-#
+sed -i 's/^CONFIG_TC=y/# CONFIG_TC is not set/' busybox-$BUSYBOX_VERSION/.config
+make -C busybox-$BUSYBOX_VERSION CC=$TARGET_CC HOSTCC=$HOST_CC -j$(nproc)
+make -C busybox-$BUSYBOX_VERSION CC=$TARGET_CC HOSTCC=$HOST_CC install
 
 echo "[+] Building filesystem..."
 cd fs
@@ -79,12 +77,8 @@ mkdir -p bin sbin etc proc sys usr/bin usr/sbin root home/ctf
 cd ..
 cp -a busybox-$BUSYBOX_VERSION/_install/* fs
 
-#
-# modules
-#
-
 echo "[+] Building modules..."
 cd src
-make
+make CC=$TARGET_CC HOSTCC=$HOST_CC
 cd ..
 cp src/*.ko fs/
